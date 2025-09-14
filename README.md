@@ -1,4 +1,9 @@
-# 🎨 Artist Photo Bot
+# PICASo / Picture Info Catalog Authors Saving
+Телеграм-бот для организации коллекции изображений с продвинутой системой тегирования и поиска
+
+https://img.shields.io/badge/python-3.9%252B-blue
+https://img.shields.io/badge/Telegram%2520Bot%2520API-20.0+-blue
+https://img.shields.io/badge/license-MIT-green
 
 A powerful Telegram bot for managing and browsing a photo database by authors, tags, and characters. Easily add, search, and navigate your collection with a beautiful, user-friendly interface.
 
@@ -77,3 +82,4 @@ Feel free to open issues or submit pull requests to improve the bot!
 ---
 
 **Made with ❤️ for the creative community.**
+
