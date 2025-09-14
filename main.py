@@ -14,7 +14,7 @@ from telegram.ext import (
 )
 import shutil
 
-TOKEN = '7913310987:AAE8cjuRW9WYUqrQElMjqOuKcESRsgURkD0'
+TOKEN = 'YOUR_TOKEN'
 
 
 # Класс для базы данных фотографий
@@ -673,4 +673,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+
     main()
