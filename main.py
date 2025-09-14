@@ -1,5 +1,7 @@
 import json
 import os
+import random
+from collections import Counter
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import (
     Application,
@@ -10,8 +12,9 @@ from telegram.ext import (
     CallbackContext,
     ConversationHandler,
 )
+import shutil
 
-TOKEN = 'YOUR_BOT_ID'
+TOKEN = '7913310987:AAE8cjuRW9WYUqrQElMjqOuKcESRsgURkD0'
 
 
 # Класс для базы данных фотографий
@@ -72,7 +75,7 @@ class PhotoDatabase:
         self.save_data()
 
     def search_by_author(self, author):
-        return [entry for entry in self.data if any(author.lower() in a.lower() for a in entry['authors'])]
+        return [entry for entry in self.data if any(author.lower() == a.lower() for a in entry['authors'])]
 
     def search_by_tag(self, tag):
         return [entry for entry in self.data if any(tag.lower() in t.lower() for t in entry['tags'])]
@@ -83,9 +86,9 @@ class PhotoDatabase:
     def get_entries(self):
         return sorted(self.data, key=lambda x: x['id'])
 
-    def get_all_authors():
+    def get_all_authors(self):
         authors = set()
-        for entry in db.data:
+        for entry in self.data:
             for author in entry['authors']:
                 authors.add(author)
         return sorted(list(authors), key=lambda x: x.lower())
@@ -111,12 +114,12 @@ def create_command_menu():
 
 
 # Функция для создания инлайн-кнопок для пролистывания
-def create_navigation_buttons(current_index, total):
+def create_navigation_buttons(current_index, total, prefix=None):
     keyboard = []
     if current_index > 0:
-        keyboard.append(InlineKeyboardButton("⬅️ Предыдущая", callback_data=f"prev_{current_index}"))
+        keyboard.append(InlineKeyboardButton("⬅️ Предыдущая", callback_data=f"{prefix or ''}prev_{current_index}"))
     if current_index < total - 1:
-        keyboard.append(InlineKeyboardButton("Следующая ➡️", callback_data=f"next_{current_index}"))
+        keyboard.append(InlineKeyboardButton("Следующая ➡️", callback_data=f"{prefix or ''}next_{current_index}"))
     return InlineKeyboardMarkup([keyboard] if keyboard else [])
 
 
@@ -177,6 +180,19 @@ async def add_characters(update: Update, context: CallbackContext) -> int:
         context.user_data['tags'],
         context.user_data['characters']
     )
+    # --- NEW: Copy to author folders and duplicate main folder ---
+    file_path = context.user_data['file_path']
+    authors = context.user_data['authors']
+    if authors:
+        for author in authors:
+            author_folder = os.path.join('photos_by_author', author)
+            os.makedirs(author_folder, exist_ok=True)
+            shutil.copy2(file_path, os.path.join(author_folder, os.path.basename(file_path)))
+    # Duplicate main folder
+    if os.path.exists('photos_backup'):
+        shutil.rmtree('photos_backup')
+    shutil.copytree('photos', 'photos_backup')
+    # --- END NEW ---
     await update.message.reply_text("✅ Фотография добавлена!", parse_mode="HTML")
     return ConversationHandler.END
 
@@ -253,45 +269,55 @@ async def update_characters_skip(update: Update, context: CallbackContext) -> in
 
 
 # Команда /search_author
-async def search_author(update: Update, context: CallbackContext) -> None:
-    await update.message.reply_text("🔍 Введите автора для поиска:")
-    return "search_author"
+async def search_author(update: Update, context: CallbackContext) -> int:
+    authors = db.get_all_authors()
+    if not authors:
+        await update.message.reply_text("❌ В базе данных нет авторов.")
+        return ConversationHandler.END
+    random_authors = random.sample(authors, min(3, len(authors)))
+    text_lines = []
+    keyboard = []
+    for idx, author in enumerate(random_authors, 1):
+        entries = db.search_by_author(author)
+        tags = [tag for entry in entries for tag in entry['tags']]
+        tag_counts = Counter(tags)
+        top_tags = ', '.join([f"#{t}" for t, _ in tag_counts.most_common(3)])
+        line = f"{idx}. {author}"
+        if top_tags:
+            line += f" — {top_tags}"
+        text_lines.append(line)
+        keyboard.append([InlineKeyboardButton(f"{author}", callback_data=f"authorselect_{author}")])
+    text = "\n".join(text_lines)
+    text += "\n\nВыберите автора, нажав на кнопку, или введите имя автора вручную:"
+    await update.message.reply_text(text)
+    return 0
 
 
-async def search_author_result(update: Update, context: CallbackContext) -> None:
+async def search_author_result(update: Update, context: CallbackContext) -> int:
     author = update.message.text
     results = db.search_by_author(author)
     if results:
-        for entry in results:
-            caption = (
-                f"<b>ID:</b> {entry['id']}\n"
-                f"<b>👤 Авторы:</b> {', '.join(entry['authors'])}\n"
-                f"<b>🏷️ Теги:</b> {', '.join(entry['tags'])}\n"
-                f"<b>👥 Персонажи:</b> {', '.join(entry['characters'])}"
+        context.user_data['search_results'] = results
+        context.user_data['search_index'] = 0
+        entry = results[0]
+        caption = (
+            f"<b>ID:</b> {entry['id']}\n"
+            f"<b>👤 Авторы:</b> {', '.join(entry['authors'])}\n"
+            f"<b>🏷️ Теги:</b> {', '.join(entry['tags'])}\n"
+            f"<b>👥 Персонажи:</b> {', '.join(entry['characters'])}"
+        )
+        try:
+            await update.message.reply_photo(
+                photo=open(entry['file_path'], 'rb'),
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=create_navigation_buttons(0, len(results), prefix='author')
             )
-            try:
-                await update.message.reply_photo(photo=open(entry['file_path'], 'rb'), caption=caption,
-                                                 parse_mode="HTML")
-            except FileNotFoundError:
-                await update.message.reply_text(f"❌ Фотография с ID {entry['id']} не найдена на сервере.")
+        except FileNotFoundError:
+            await update.message.reply_text(f"❌ Фотография с ID {entry['id']} не найдена на сервере.")
     else:
         await update.message.reply_text(f"❌ Записей с автором '{author}' не найдено.")
-
-
-async def search_author_list(update: Update, context: CallbackContext) -> None:
-    authors = get_all_authors()
-    if not authors:
-        await update.message.reply_text("❌ В базе данных нет авторов.")
-        return
-    context.user_data['authors_list'] = authors
-    context.user_data['current_author_index'] = 0
-
-    current_author = authors[0]
-    await update.message.reply_text(
-        f"👤 Автор: <b>{current_author}</b>",
-        parse_mode="HTML",
-        reply_markup=create_author_navigation_buttons(0, len(authors))
-    )
+    return ConversationHandler.END
 
 
 # Команда /search_tag
@@ -300,24 +326,62 @@ async def search_tag(update: Update, context: CallbackContext) -> None:
     return "search_tag"
 
 
-async def search_tag_result(update: Update, context: CallbackContext) -> None:
+async def search_tag_result(update: Update, context: CallbackContext) -> int:
     tag = update.message.text
     results = db.search_by_tag(tag)
     if results:
-        for entry in results:
-            caption = (
-                f"<b>ID:</b> {entry['id']}\n"
-                f"<b>👤 Авторы:</b> {', '.join(entry['authors'])}\n"
-                f"<b>🏷️ Теги:</b> {', '.join(entry['tags'])}\n"
-                f"<b>👥 Персонажи:</b> {', '.join(entry['characters'])}"
+        context.user_data['search_results'] = results
+        context.user_data['search_index'] = 0
+        entry = results[0]
+        caption = (
+            f"<b>ID:</b> {entry['id']}\n"
+            f"<b>👤 Авторы:</b> {', '.join(entry['authors'])}\n"
+            f"<b>🏷️ Теги:</b> {', '.join(entry['tags'])}\n"
+            f"<b>👥 Персонажи:</b> {', '.join(entry['characters'])}"
+        )
+        try:
+            await update.message.reply_photo(
+                photo=open(entry['file_path'], 'rb'),
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=create_navigation_buttons(0, len(results), prefix='tag')
             )
-            try:
-                await update.message.reply_photo(photo=open(entry['file_path'], 'rb'), caption=caption,
-                                                 parse_mode="HTML")
-            except FileNotFoundError:
-                await update.message.reply_text(f"❌ Фотография с ID {entry['id']} не найдена на сервере.")
+        except FileNotFoundError:
+            await update.message.reply_text(f"❌ Фотография с ID {entry['id']} не найдена на сервере.")
     else:
         await update.message.reply_text(f"❌ Записей с тегом '{tag}' не найдено.")
+
+
+async def tag_button_handler(update: Update, context: CallbackContext) -> None:
+    query = update.callback_query
+    await query.answer()
+    results = context.user_data.get('search_results', [])
+    if not results:
+        await query.edit_message_text("❌ Ошибка: список записей недоступен.")
+        return
+    current_index = context.user_data.get('search_index', 0)
+    callback_data = query.data
+    if callback_data.startswith("tagprev_"):
+        current_index = max(0, current_index - 1)
+    elif callback_data.startswith("tagnext_"):
+        current_index = min(len(results) - 1, current_index + 1)
+    context.user_data['search_index'] = current_index
+    entry = results[current_index]
+    caption = (
+        f"<b>ID:</b> {entry['id']}\n"
+        f"<b>👤 Авторы:</b> {', '.join(entry['authors'])}\n"
+        f"<b>🏷️ Теги:</b> {', '.join(entry['tags'])}\n"
+        f"<b>👥 Персонажи:</b> {', '.join(entry['characters'])}"
+    )
+    try:
+        await query.edit_message_media(
+            media=InputMediaPhoto(open(entry['file_path'], 'rb'), caption=caption, parse_mode="HTML"),
+            reply_markup=create_navigation_buttons(current_index, len(results), prefix='tag')
+        )
+    except FileNotFoundError:
+        await query.edit_message_text(f"❌ Фотография с ID {entry['id']} не найдена на сервере.")
+    except Exception as e:
+        await query.edit_message_text(f"❌ Произошла ошибка при обновлении фотографии: {str(e)}")
 
 
 # Команда /search_character
@@ -326,24 +390,62 @@ async def search_character(update: Update, context: CallbackContext) -> None:
     return "search_character"
 
 
-async def search_character_result(update: Update, context: CallbackContext) -> None:
+async def search_character_result(update: Update, context: CallbackContext) -> int:
     character = update.message.text
     results = db.search_by_character(character)
     if results:
-        for entry in results:
-            caption = (
-                f"<b>ID:</b> {entry['id']}\n"
-                f"<b>👤 Авторы:</b> {', '.join(entry['authors'])}\n"
-                f"<b>🏷️ Теги:</b> {', '.join(entry['tags'])}\n"
-                f"<b>👥 Персонажи:</b> {', '.join(entry['characters'])}"
+        context.user_data['search_results'] = results
+        context.user_data['search_index'] = 0
+        entry = results[0]
+        caption = (
+            f"<b>ID:</b> {entry['id']}\n"
+            f"<b>👤 Авторы:</b> {', '.join(entry['authors'])}\n"
+            f"<b>🏷️ Теги:</b> {', '.join(entry['tags'])}\n"
+            f"<b>👥 Персонажи:</b> {', '.join(entry['characters'])}"
+        )
+        try:
+            await update.message.reply_photo(
+                photo=open(entry['file_path'], 'rb'),
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=create_navigation_buttons(0, len(results), prefix='character')
             )
-            try:
-                await update.message.reply_photo(photo=open(entry['file_path'], 'rb'), caption=caption,
-                                                 parse_mode="HTML")
-            except FileNotFoundError:
-                await update.message.reply_text(f"❌ Фотография с ID {entry['id']} не найдена на сервере.")
+        except FileNotFoundError:
+            await update.message.reply_text(f"❌ Фотография с ID {entry['id']} не найдена на сервере.")
     else:
         await update.message.reply_text(f"❌ Записей с персонажем '{character}' не найдено.")
+
+
+async def character_button_handler(update: Update, context: CallbackContext) -> None:
+    query = update.callback_query
+    await query.answer()
+    results = context.user_data.get('search_results', [])
+    if not results:
+        await query.edit_message_text("❌ Ошибка: список записей недоступен.")
+        return
+    current_index = context.user_data.get('search_index', 0)
+    callback_data = query.data
+    if callback_data.startswith("characterprev_"):
+        current_index = max(0, current_index - 1)
+    elif callback_data.startswith("characternext_"):
+        current_index = min(len(results) - 1, current_index + 1)
+    context.user_data['search_index'] = current_index
+    entry = results[current_index]
+    caption = (
+        f"<b>ID:</b> {entry['id']}\n"
+        f"<b>👤 Авторы:</b> {', '.join(entry['authors'])}\n"
+        f"<b>🏷️ Теги:</b> {', '.join(entry['tags'])}\n"
+        f"<b>👥 Персонажи:</b> {', '.join(entry['characters'])}"
+    )
+    try:
+        await query.edit_message_media(
+            media=InputMediaPhoto(open(entry['file_path'], 'rb'), caption=caption, parse_mode="HTML"),
+            reply_markup=create_navigation_buttons(current_index, len(results), prefix='character')
+        )
+    except FileNotFoundError:
+        await query.edit_message_text(f"❌ Фотография с ID {entry['id']} не найдена на сервере.")
+    except Exception as e:
+        await query.edit_message_text(f"❌ Произошла ошибка при обновлении фотографии: {str(e)}")
 
 
 # Команда /display
@@ -383,7 +485,7 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
 
     entries = context.user_data.get('display_entries', [])
     if not entries:
-        await query.message.edit_text("❌ Ошибка: список записей недоступен.")
+        await query.edit_message_text("❌ Ошибка: список записей недоступен.")
         return
 
     current_index = context.user_data.get('current_index', 0)
@@ -396,7 +498,7 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         elif callback_data.startswith("next_"):
             current_index = min(len(entries) - 1, current_index + 1)
     except ValueError:
-        await query.message.edit_text("❌ Ошибка: неверные данные кнопки.")
+        await query.edit_message_text("❌ Ошибка: неверные данные кнопки.")
         return
 
     context.user_data['current_index'] = current_index
@@ -411,14 +513,47 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
 
     try:
         # Обновляем сообщение с новым фото и кнопками
-        await query.message.edit_media(
+        await query.edit_message_media(
             media=InputMediaPhoto(open(entry['file_path'], 'rb'), caption=caption, parse_mode="HTML"),
             reply_markup=create_navigation_buttons(current_index, len(entries))
         )
     except FileNotFoundError:
-        await query.message.edit_text(f"❌ Фотография с ID {entry['id']} не найдена на сервере.")
+        await query.edit_message_text(f"❌ Фотография с ID {entry['id']} не найдена на сервере.")
     except Exception as e:
-        await query.message.edit_text(f"❌ Произошла ошибка при обновлении фотографии: {str(e)}")
+        await query.edit_message_text(f"❌ Произошла ошибка при обновлении фотографии: {str(e)}")
+
+
+# Обработчик кнопок пролистывания по авторам
+async def author_button_handler(update: Update, context: CallbackContext) -> None:
+    query = update.callback_query
+    await query.answer()
+    results = context.user_data.get('search_results', [])
+    if not results:
+        await query.edit_message_text("❌ Ошибка: список записей недоступен.")
+        return
+    current_index = context.user_data.get('search_index', 0)
+    callback_data = query.data
+    if callback_data.startswith("authorprev_"):
+        current_index = max(0, current_index - 1)
+    elif callback_data.startswith("authornext_"):
+        current_index = min(len(results) - 1, current_index + 1)
+    context.user_data['search_index'] = current_index
+    entry = results[current_index]
+    caption = (
+        f"<b>ID:</b> {entry['id']}\n"
+        f"<b>👤 Авторы:</b> {', '.join(entry['authors'])}\n"
+        f"<b>🏷️ Теги:</b> {', '.join(entry['tags'])}\n"
+        f"<b>👥 Персонажи:</b> {', '.join(entry['characters'])}"
+    )
+    try:
+        await query.edit_message_media(
+            media=InputMediaPhoto(open(entry['file_path'], 'rb'), caption=caption, parse_mode="HTML"),
+            reply_markup=create_navigation_buttons(current_index, len(results), prefix='author')
+        )
+    except FileNotFoundError:
+        await query.edit_message_text(f"❌ Фотография с ID {entry['id']} не найдена на сервере.")
+    except Exception as e:
+        await query.edit_message_text(f"❌ Произошла ошибка при обновлении фотографии: {str(e)}")
 
 
 # Команда /cancel
@@ -489,7 +624,7 @@ def main() -> None:
     search_author_conversation_handler = ConversationHandler(
         entry_points=[CommandHandler('search_author', search_author)],
         states={
-            "search_author": [MessageHandler(filters.TEXT & ~filters.COMMAND, search_author_result)],
+            0: [MessageHandler(filters.TEXT & ~filters.COMMAND, search_author_result)],
         },
         fallbacks=[CommandHandler('cancel', cancel)],
     )
@@ -520,6 +655,15 @@ def main() -> None:
 
     # Обработчик кнопок пролистывания
     application.add_handler(CallbackQueryHandler(button_handler, pattern="^(prev|next)_"))
+
+    # Обработчик кнопок пролистывания по авторам
+    application.add_handler(CallbackQueryHandler(author_button_handler, pattern="^author(prev|next)_"))
+
+    # Обработчик кнопок пролистывания по тегам
+    application.add_handler(CallbackQueryHandler(tag_button_handler, pattern="^tag(prev|next)_"))
+
+    # Обработчик кнопок пролистывания по персонажам
+    application.add_handler(CallbackQueryHandler(character_button_handler, pattern="^character(prev|next)_"))
 
     # Обработчик команды /help
     application.add_handler(CommandHandler("help", help_command))
