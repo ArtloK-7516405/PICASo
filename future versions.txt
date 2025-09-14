@@ -1,0 +1,6 @@
+1.*
+- Fix the function for changing images that have already been added (It ignores the launch of new functions and requires you to continue entering changeable data)
+- Adding settings for the ability to view multiple images at once and scroll through multiple images 
+- Add buttons to several suggested authors or the ability to copy the author's name to the clipboard
+- Adding automatic tag matching
+- Adding the ability to upload multiple images of the same character from the same author
