@@ -4,3 +4,4 @@
 - Add buttons to several suggested authors or the ability to copy the author's name to the clipboard
 - Adding automatic tag matching
 - Adding the ability to upload multiple images of the same character from the same author
+- Add support for subscribing to an author and notification if available
